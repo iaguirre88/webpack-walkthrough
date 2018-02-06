@@ -1,268 +1,159 @@
-'use strict';
+import {emptyItemQuery} from './item';
+import Store from './store';
+import View from './view';
 
-/**
- * Takes a model and view and acts as the controller between them
- *
- * @constructor
- * @param {object} model The model instance
- * @param {object} view The view instance
- */
-function Controller(model, view) {
-  var self = this;
-  self.model = model;
-  self.view = view;
+export default class Controller {
+	/**
+	 * @param  {!Store} store A Store instance
+	 * @param  {!View} view A View instance
+	 */
+	constructor(store, view) {
+		this.store = store;
+		this.view = view;
 
-  self.view.bind('newTodo', function (title) {
-    self.addItem(title);
-  });
+		view.bindAddItem(this.addItem.bind(this));
+		view.bindEditItemSave(this.editItemSave.bind(this));
+		view.bindEditItemCancel(this.editItemCancel.bind(this));
+		view.bindRemoveItem(this.removeItem.bind(this));
+		view.bindToggleItem((id, completed) => {
+			this.toggleCompleted(id, completed);
+			this._filter();
+		});
+		view.bindRemoveCompleted(this.removeCompletedItems.bind(this));
+		view.bindToggleAll(this.toggleAll.bind(this));
 
-  self.view.bind('itemEdit', function (item) {
-    self.editItem(item.id);
-  });
+		this._activeRoute = '';
+		this._lastActiveRoute = null;
+	}
 
-  self.view.bind('itemEditDone', function (item) {
-    self.editItemSave(item.id, item.title);
-  });
+	/**
+	 * Set and render the active route.
+	 *
+	 * @param {string} raw '' | '#/' | '#/active' | '#/completed'
+	 */
+	setView(raw) {
+		const route = raw.replace(/^#\//, '');
+		this._activeRoute = route;
+		this._filter();
+		this.view.updateFilterButtons(route);
+	}
 
-  self.view.bind('itemEditCancel', function (item) {
-    self.editItemCancel(item.id);
-  });
+	/**
+	 * Add an Item to the Store and display it in the list.
+	 *
+	 * @param {!string} title Title of the new item
+	 */
+	addItem(title) {
+		this.store.insert({
+			id: Date.now(),
+			title,
+			completed: false
+		}, () => {
+			this.view.clearNewTodo();
+			this._filter(true);
+		});
+	}
 
-  self.view.bind('itemRemove', function (item) {
-    self.removeItem(item.id);
-  });
+	/**
+	 * Save an Item in edit.
+	 *
+	 * @param {number} id ID of the Item in edit
+	 * @param {!string} title New title for the Item in edit
+	 */
+	editItemSave(id, title) {
+		if (title.length) {
+			this.store.update({id, title}, () => {
+				this.view.editItemDone(id, title);
+			});
+		} else {
+			this.removeItem(id);
+		}
+	}
 
-  self.view.bind('itemToggle', function (item) {
-    self.toggleComplete(item.id, item.completed);
-  });
+	/**
+	 * Cancel the item editing mode.
+	 *
+	 * @param {!number} id ID of the Item in edit
+	 */
+	editItemCancel(id) {
+		this.store.find({id}, data => {
+			const title = data[0].title;
+			this.view.editItemDone(id, title);
+		});
+	}
 
-  self.view.bind('removeCompleted', function () {
-    self.removeCompletedItems();
-  });
+	/**
+	 * Remove the data and elements related to an Item.
+	 *
+	 * @param {!number} id Item ID of item to remove
+	 */
+	removeItem(id) {
+		this.store.remove({id}, () => {
+			this._filter();
+			this.view.removeItem(id);
+		});
+	}
 
-  self.view.bind('toggleAll', function (status) {
-    self.toggleAll(status.completed);
-  });
+	/**
+	 * Remove all completed items.
+	 */
+	removeCompletedItems() {
+		this.store.remove({completed: true}, this._filter.bind(this));
+	}
+
+	/**
+	 * Update an Item in storage based on the state of completed.
+	 *
+	 * @param {!number} id ID of the target Item
+	 * @param {!boolean} completed Desired completed state
+	 */
+	toggleCompleted(id, completed) {
+		this.store.update({id, completed}, () => {
+			this.view.setItemComplete(id, completed);
+		});
+	}
+
+	/**
+	 * Set all items to complete or active.
+	 *
+	 * @param {boolean} completed Desired completed state
+	 */
+	toggleAll(completed) {
+		this.store.find({completed: !completed}, data => {
+			for (let {id} of data) {
+				this.toggleCompleted(id, completed);
+			}
+		});
+
+		this._filter();
+	}
+
+	/**
+	 * Refresh the list based on the current route.
+	 *
+	 * @param {boolean} [force] Force a re-paint of the list
+	 */
+	_filter(force) {
+		const route = this._activeRoute;
+
+		if (force || this._lastActiveRoute !== '' || this._lastActiveRoute !== route) {
+			/* jscs:disable disallowQuotedKeysInObjects */
+			this.store.find({
+				'': emptyItemQuery,
+				'active': {completed: false},
+				'completed': {completed: true}
+			}[route], this.view.showItems.bind(this.view));
+			/* jscs:enable disallowQuotedKeysInObjects */
+		}
+
+		this.store.count((total, active, completed) => {
+			this.view.setItemsLeft(active);
+			this.view.setClearCompletedButtonVisibility(completed);
+
+			this.view.setCompleteAllCheckbox(completed === total);
+			this.view.setMainVisibility(total);
+		});
+
+		this._lastActiveRoute = route;
+	}
 }
-
-/**
- * Loads and initialises the view
- *
- * @param {string} '' | 'active' | 'completed'
- */
-Controller.prototype.setView = function (locationHash) {
-  var route = locationHash.split('/')[1];
-  var page = route || '';
-  this._updateFilterState(page);
-};
-
-/**
- * An event to fire on load. Will get all items and display them in the
- * todo-list
- */
-Controller.prototype.showAll = function () {
-  var self = this;
-  self.model.read(function (data) {
-    self.view.render('showEntries', data);
-  });
-};
-
-/**
- * Renders all active tasks
- */
-Controller.prototype.showActive = function () {
-  var self = this;
-  self.model.read({ completed: false }, function (data) {
-    self.view.render('showEntries', data);
-  });
-};
-
-/**
- * Renders all completed tasks
- */
-Controller.prototype.showCompleted = function () {
-  var self = this;
-  self.model.read({ completed: true }, function (data) {
-    self.view.render('showEntries', data);
-  });
-};
-
-/**
- * An event to fire whenever you want to add an item. Simply pass in the event
- * object and it'll handle the DOM insertion and saving of the new item.
- */
-Controller.prototype.addItem = function (title) {
-  var self = this;
-
-  if (title.trim() === '') {
-    return;
-  }
-
-  self.model.create(title, function () {
-    self.view.render('clearNewTodo');
-    self._filter(true);
-  });
-};
-
-/*
- * Triggers the item editing mode.
- */
-Controller.prototype.editItem = function (id) {
-  var self = this;
-  self.model.read(id, function (data) {
-    self.view.render('editItem', {id: id, title: data[0].title});
-  });
-};
-
-/*
- * Finishes the item editing mode successfully.
- */
-Controller.prototype.editItemSave = function (id, title) {
-  var self = this;
-  title = title.trim();
-
-  if (title.length !== 0) {
-    self.model.update(id, {title: title}, function () {
-      self.view.render('editItemDone', {id: id, title: title});
-    });
-  } else {
-    self.removeItem(id);
-  }
-};
-
-/*
- * Cancels the item editing mode.
- */
-Controller.prototype.editItemCancel = function (id) {
-  var self = this;
-  self.model.read(id, function (data) {
-    self.view.render('editItemDone', {id: id, title: data[0].title});
-  });
-};
-
-/**
- * By giving it an ID it'll find the DOM element matching that ID,
- * remove it from the DOM and also remove it from storage.
- *
- * @param {number} id The ID of the item to remove from the DOM and
- * storage
- */
-Controller.prototype.removeItem = function (id) {
-  var self = this;
-  self.model.remove(id, function () {
-    self.view.render('removeItem', id);
-  });
-
-  self._filter();
-};
-
-/**
- * Will remove all completed items from the DOM and storage.
- */
-Controller.prototype.removeCompletedItems = function () {
-  var self = this;
-  self.model.read({ completed: true }, function (data) {
-    data.forEach(function (item) {
-      self.removeItem(item.id);
-    });
-  });
-
-  self._filter();
-};
-
-/**
- * Give it an ID of a model and a checkbox and it will update the item
- * in storage based on the checkbox's state.
- *
- * @param {number} id The ID of the element to complete or uncomplete
- * @param {object} checkbox The checkbox to check the state of complete
- *                          or not
- * @param {boolean|undefined} silent Prevent re-filtering the todo items
- */
-Controller.prototype.toggleComplete = function (id, completed, silent) {
-  var self = this;
-  self.model.update(id, { completed: completed }, function () {
-    self.view.render('elementComplete', {
-      id: id,
-      completed: completed
-    });
-  });
-
-  if (!silent) {
-    self._filter();
-  }
-};
-
-/**
- * Will toggle ALL checkboxes' on/off state and completeness of models.
- * Just pass in the event object.
- */
-Controller.prototype.toggleAll = function (completed) {
-  var self = this;
-  self.model.read({ completed: !completed }, function (data) {
-    data.forEach(function (item) {
-      self.toggleComplete(item.id, completed, true);
-    });
-  });
-
-  self._filter();
-};
-
-/**
- * Updates the pieces of the page which change depending on the remaining
- * number of todos.
- */
-Controller.prototype._updateCount = function () {
-  var self = this;
-  self.model.getCount(function (todos) {
-    self.view.render('updateElementCount', todos.active);
-    self.view.render('clearCompletedButton', {
-      completed: todos.completed,
-      visible: todos.completed > 0
-    });
-
-    self.view.render('toggleAll', {checked: todos.completed === todos.total});
-    self.view.render('contentBlockVisibility', {visible: todos.total > 0});
-  });
-};
-
-/**
- * Re-filters the todo items, based on the active route.
- * @param {boolean|undefined} force  forces a re-painting of todo items.
- */
-Controller.prototype._filter = function (force) {
-  var activeRoute = this._activeRoute.charAt(0).toUpperCase() + this._activeRoute.substr(1);
-
-  // Update the elements on the page, which change with each completed todo
-  this._updateCount();
-
-  // If the last active route isn't "All", or we're switching routes, we
-  // re-create the todo item elements, calling:
-  //   this.show[All|Active|Completed]();
-  if (force || this._lastActiveRoute !== 'All' || this._lastActiveRoute !== activeRoute) {
-    this['show' + activeRoute]();
-  }
-
-  this._lastActiveRoute = activeRoute;
-};
-
-/**
- * Simply updates the filter nav's selected states
- */
-Controller.prototype._updateFilterState = function (currentPage) {
-  // Store a reference to the active route, allowing us to re-filter todo
-  // items as they are marked complete or incomplete.
-  this._activeRoute = currentPage;
-
-  if (currentPage === '') {
-    this._activeRoute = 'All';
-  }
-
-  this._filter();
-
-  this.view.render('setFilter', currentPage);
-};
-
-// Export to window
-window.app = window.app || {};
-window.app.Controller = Controller;

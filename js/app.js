@@ -1,29 +1,19 @@
-'use strict';
+import Controller from './controller';
+import {$on} from './helpers';
+import Template from './template';
+import Store from './store';
+import View from './view';
 
-require('./controller');
-require('./helpers');
-require('./model');
-require('./store');
-require('./template');
-require('./view');
+const store = new Store('todos-vanilla-es6');
+
+const template = new Template();
+const view = new View(template);
 
 /**
- * Sets up a brand new Todo list.
- *
- * @param {string} name The name of your new to do list.
+ * @type {Controller}
  */
-function Todo(name) {
-  this.storage = new app.Store(name);
-  this.model = new app.Model(this.storage);
-  this.template = new app.Template();
-  this.view = new app.View(this.template);
-  this.controller = new app.Controller(this.model, this.view);
-}
+const controller = new Controller(store, view);
 
-var todo = new Todo('todos-vanillajs');
-
-function setView() {
-  todo.controller.setView(document.location.hash);
-}
+const setView = () => controller.setView(document.location.hash);
 $on(window, 'load', setView);
 $on(window, 'hashchange', setView);
