@@ -2,6 +2,13 @@
 (function () {
 	'use strict';
 
+        require('./controller');
+        require('./helpers');
+        require('./model');
+        require('./store');
+        require('./template');
+        require('./view');
+
 	/**
 	 * Sets up a brand new Todo list.
 	 *
