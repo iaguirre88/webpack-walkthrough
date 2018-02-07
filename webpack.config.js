@@ -1,5 +1,6 @@
-// const { resolve } = require('path');
 var resolve = require('path').resolve;
+
+const UglifyJsPlugin = require('uglifyjs-webpack-plugin');
 
 module.exports = {
   entry: resolve('js', 'app.js'),
@@ -11,5 +12,11 @@ module.exports = {
     rules: [
       { test: /\.js$/, exclude: /node_modules/, use: 'babel-loader' }
     ]
-  }
+  },
+  plugins: [
+    new UglifyJsPlugin({
+      test: /\.js$/,
+      exclude: /node_modules/,
+    })
+  ]
 };
